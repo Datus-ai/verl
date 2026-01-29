@@ -1,10 +1,9 @@
 # datus/tools/verl_tools/bird_text2sql_reward_fn.py
-import json
 import logging
 import math
 import os
 from typing import Any, Optional, Dict, List
-from verl.tools.db_tool import _connector
+from .db_tool import _connector
 import sqlglot
 from pandas import DataFrame, Series, isna
 logger = logging.getLogger(__name__)
