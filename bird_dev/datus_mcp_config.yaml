@@ -1,0 +1,17 @@
+tools:
+  - class_name: verl.tools.mcp_base_tool.MCPBaseTool
+    config:
+      rate_limit: 100
+      timeout: 60
+      type: mcp
+    mcp:
+      mcp_servers_config_path: /root/verl/bird_dev/mcp_server.json
+      tool_selected_list:
+        - list_databases
+        - list_tables
+        - describe_table
+        - get_table_ddl
+        - list_subject_tree
+        - get_metrics
+        - get_reference_sql
+        - get_knowledge

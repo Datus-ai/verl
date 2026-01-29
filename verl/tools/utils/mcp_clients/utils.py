@@ -42,14 +42,47 @@ class TokenBucket:
             return False
 
 
+def _transform_anyof_schema(schema: dict) -> dict:
+    """Transform anyOf schemas to simple type format.
+
+    MCP servers may return schemas with anyOf for optional types like:
+    {"anyOf": [{"type": "string"}, {"type": "null"}]}
+
+    This transforms them to simple format:
+    {"type": "string"}
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    # Handle properties in parameters
+    if "properties" in schema:
+        for prop_name, prop_def in schema["properties"].items():
+            if isinstance(prop_def, dict) and "anyOf" in prop_def:
+                # Extract first non-null type from anyOf
+                for type_def in prop_def["anyOf"]:
+                    if isinstance(type_def, dict) and type_def.get("type") != "null":
+                        prop_def["type"] = type_def.get("type")
+                        # Copy other fields like description if present
+                        if "description" in type_def:
+                            prop_def["description"] = type_def["description"]
+                        break
+                # Remove anyOf after extracting type
+                del prop_def["anyOf"]
+
+    return schema
+
+
 def mcp2openai(mcp_tool: Tool) -> dict:
     """Convert a MCP Tool to an OpenAI ChatCompletionTool."""
+    # Transform anyOf schemas before creating OpenAI format
+    parameters = _transform_anyof_schema(dict(mcp_tool.inputSchema))
+
     openai_format = {
         "type": "function",
         "function": {
             "name": mcp_tool.name,
             "description": mcp_tool.description,
-            "parameters": mcp_tool.inputSchema,
+            "parameters": parameters,
             "strict": False,
         },
     }

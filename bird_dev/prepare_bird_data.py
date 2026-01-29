@@ -1,11 +1,9 @@
 import argparse
 import os
 import json
-from datasets import load_dataset, Dataset
-import pandas as pd
+from datasets import load_dataset
 
 # Assume the fields required by the Verl framework
-# Refer to Verl official documentation, PPO data requires at least: data_source, prompt, ability, reward_model (including ground_truth)
 VERL_FIELDS = [
     "data_source",
     "prompt",
@@ -19,41 +17,33 @@ MAX_TEST = 4
 def make_map_fn(split):
     """
     Defines functions that map raw BIRD records to Verl format.
+
+    Args:
+        split: Data set partitioning ("train" or "test")
     """
-    data_source = "bird_text2sql" # Used to index reward functions in Verl configuration
+    data_source = "bird_text2sql"
 
     def process_fn(example, idx):
-        # 1. Extract BIRD key information
-        db_id = example["db_id"]
+        # 从 BIRD 数据集读取原始字段（使用数据集实际的字段名）
+        # 注意：检查数据集字段是 "db_id" 还是 "database"
+        database = example.get("database") or example.get("db_id")
+        if not database:
+            raise ValueError(f"No database field found in example: {example.keys()}")
+
         question = example["question"]
         gold_sql = example["SQL"]
-        evidence = example.get("evidence") # 尝试使用 evidence 字段
-        # 2. Get Schema information
-        # schema_str = load_schema(db_id, schema_dir)
+        evidence = example.get("evidence")
 
-        # 3. Format Prompt (Text-to-SQL command)
-        # The input format expected by LLM, usually "Schema + Question + Instruction"
-        # Using ChatML format, Verl's tokenizer will apply chat_template
-
-        prompt_content = (
-            "### Question:\n"
-            f"{question}\n\n"
-        )
-
-        # Optional Evidence (if present)
+        # CRITICAL: 明确告诉模型当前的 database
+        prompt_content = f"Database: {database}\n\n"
+        prompt_content += f"### Question:\n{question}\n\n"
         if evidence:
-            prompt_content += (
-                "### Evidence:\n"
-                f"{evidence}\n\n"
-            )
-
-        # final SQL anchor
+            prompt_content += f"### Evidence:\n{evidence}\n\n"
         prompt_content += "### SQL Query:\n"
 
         data = {
             "data_source": data_source,
             "agent_name": "tool_agent",
-            # Verl PPO example uses [{'role': 'user', 'content': ...}] list format
             "prompt": [
                 {"role": "user", "content": prompt_content}
             ],
@@ -64,21 +54,30 @@ def make_map_fn(split):
                 "style": "execution_accuracy",
                 "ground_truth": json.dumps({
                     "gold_sql": gold_sql,
-                    "db_id": db_id,
+                    "database": database,
                 })
             },
-
-            # 5. Additional information
             "extra_info": {
                 "split": split,
                 "index": idx,
-                "db_id": db_id,
+                "database": database,
                 "question": question,
                 "gold_sql": gold_sql,
+                # Parameters required for tool initialization
+                # "need_tools_kwargs": True,
+                # "tools_kwargs": {
+                #     "list_databases": {"create_kwargs": {"database": db_id}},
+                #     "list_tables": {"create_kwargs": {"database": db_id}},
+                #     "describe_table": {"create_kwargs": {"database": db_id}},
+                #     "get_table_ddl": {"create_kwargs": {"database": db_id}},
+                #     "list_subject_tree": {"create_kwargs": {}},
+                #     "get_metrics": {"create_kwargs": {}},
+                #     "get_reference_sql": {"create_kwargs": {}},
+                #     "get_knowledge": {"create_kwargs": {}},
+                # },
             }
         }
 
-        # Check if all required fields are in the result
         if not all(field in data for field in VERL_FIELDS):
             raise ValueError(f"Missing required Verl fields in data mapping: {data}")
 
@@ -120,10 +119,11 @@ def main():
 
     # --- Step 2 & 3: Mapping to Verl format---
     print("Mapping dataset to Verl format...")
+
     train_dataset = train_dataset.map(
         function=make_map_fn("train"),
         with_indices=True,
-        remove_columns=train_dataset.column_names # Remove the original columns and keep only the Verl field
+        remove_columns=train_dataset.column_names  # Remove the original columns and keep only the Verl field
     )
     test_dataset = test_dataset.map(
         function=make_map_fn("test"),

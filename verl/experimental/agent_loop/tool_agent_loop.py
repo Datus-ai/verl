@@ -293,7 +293,9 @@ class ToolAgentLoop(AgentLoopBase):
 
         # Process tool responses and update multi_modal_data
         # Removed: agent_data.new_images_this_turn = []
-        for tool_response, tool_reward, _ in responses:
+        print(f"🎯 [TOOLS_EXECUTED] count={len(responses)}, names={tool_call_names}")
+        for i, (tool_response, tool_reward, _) in enumerate(responses):
+            print(f"📦 [TOOL_RESPONSE_{i}] name={tool_call_names[i]}, text={tool_response.text[:100]}...")
             # Create message from tool response
             if tool_response.image or tool_response.video:
                 # Multi-modal content with structured format
@@ -315,6 +317,7 @@ class ToolAgentLoop(AgentLoopBase):
                 # Text-only content
                 message = {"role": "tool", "content": tool_response.text or ""}
 
+            print(f"💬 [TOOL_MESSAGE] role=tool, content_preview={str(message['content'])[:100]}...")
             add_messages.append(message)
 
             # Handle image data
@@ -428,6 +431,10 @@ class ToolAgentLoop(AgentLoopBase):
             tool_execution_response, tool_reward, res = await tool.execute(
                 instance_id, tool_args, agent_data=agent_data
             )
+            # 🔍 Print tool execution result
+            print(f"🔧 [TOOL_CALL] name={tool_name}, args={tool_args}")
+            print(f"✅ [TOOL_RESULT] text={tool_execution_response.text}")
+            print(f"📊 [TOOL_REWARD] reward={tool_reward}")
         except Exception as e:
             logger.warning(f"Error when executing tool: {e}")
             return (

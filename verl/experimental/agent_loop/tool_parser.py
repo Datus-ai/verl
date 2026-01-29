@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import asyncio
 import json
 import logging
 import os
@@ -19,7 +20,6 @@ from abc import ABC, abstractmethod
 import regex
 from pydantic import BaseModel
 
-from verl.utils.ray_utils import get_event_loop
 from verl.utils.rollout_trace import rollout_trace_op
 
 logger = logging.getLogger(__file__)
@@ -82,10 +82,54 @@ class HermesToolParser(ToolParser):
         self.tool_call_start_token: str = "<tool_call>"
         self.tool_call_end_token: str = "</tool_call>"
         self.tool_call_regex = regex.compile(r"<tool_call>(.*?)</tool_call>", regex.DOTALL)
+    def _fix_json_escape_issues(self, json_str: str) -> str:
+        """
+        Fix common JSON escaping issues
+        """
+        fixed = json_str
 
+        # 1. Fix unescaped backslashes (inside string values)
+        # Note: A more precise match is required here to avoid damaging the JSON structure.
+        try:
+            # Fix unescaped characters in string values
+            # Match the string content in "arguments": "..."
+            import re
+
+            # Fix \n, \t, \r in string values
+            def fix_string_content(match):
+                content = match.group(1)
+                # In the string content, \n should become \\n
+                content = content.replace('\n', '\\n')
+                content = content.replace('\t', '\\t')
+                content = content.replace('\r', '\\r')
+                content = content.replace('"', '\\"')
+                return f'"{content}"'
+
+            # Matches string values in "arguments": "..."
+            fixed = re.sub(r'"arguments"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', fix_string_content, fixed)
+
+        except Exception as e:
+            print(f"⚠️  [JSON_FIX_ERROR] Failed to fix JSON: {e}")
+            return json_str  # If repair fails, return the original string
+
+        # 2. Fix control characters (safer handling)
+        try:
+            import unicodedata
+            result = []
+            for char in fixed:
+                if unicodedata.category(char)[0] == 'C' and char not in '\n\r\t':
+                    # Convert control characters to Unicode escape sequences
+                    result.append(f'\\u{ord(char):04x}')
+                else:
+                    result.append(char)
+            fixed = ''.join(result)
+        except:
+            pass  # If it fails, leave it as is
+
+        return fixed
     @rollout_trace_op
     async def extract_tool_calls(self, responses_ids: list[int]) -> tuple[str, list[FunctionCall]]:
-        loop = get_event_loop()
+        loop = asyncio.get_running_loop()
         text = await loop.run_in_executor(None, self.tokenizer.decode, responses_ids)
         if self.tool_call_start_token not in text or self.tool_call_end_token not in text:
             return text, []
@@ -94,13 +138,36 @@ class HermesToolParser(ToolParser):
         function_calls = []
         for match in matches:
             try:
-                function_call = json.loads(match)
-                name, arguments = function_call["name"], function_call["arguments"]
+                # 🎯 Improve JSON parsing error handling
+                print(f"🔍 [JSON_PARSE] Attempting to parse: {match[:200]}...")
+                
+                # Try fixing common JSON escaping issues
+                fixed_match = self._fix_json_escape_issues(match)
+                if fixed_match != match:
+                    print(f"🔧 [JSON_FIX] Fixed JSON: {fixed_match[:200]}...")
+                
+                function_call = json.loads(fixed_match)
+                name, arguments = function_call["name"], function_call.get("arguments", {})
                 function_calls.append(FunctionCall(name=name, arguments=json.dumps(arguments, ensure_ascii=False)))
+                print(f"✅ [JSON_SUCCESS] Parsed tool call: {name}")
+                
             except Exception as e:
+                print(f"❌ [JSON_ERROR] Failed to decode tool call: {e}")
+                print(f"📄 [JSON_RAW] Raw content: {match}")
                 logger.error(f"Failed to decode tool call: {e}")
+                
+                # 🎯 Try to extract useful information from the error
+                try:
+                    # Try to extract tool name (even if JSON is incomplete)
+                    if '"name"' in match and '"arguments"' in match:
+                        name_match = re.search(r'"name"\s*:\s*"([^"]+)"', match)
+                        if name_match:
+                            tool_name = name_match.group(1)
+                            print(f"🔍 [PARTIAL_PARSE] Extracted tool name: {tool_name}")
+                except:
+                    pass
 
-        # remaing text exclude tool call tokens
+        # remain text exclude tool call tokens
         content = self.tool_call_regex.sub("", text)
 
         return content, function_calls
@@ -132,7 +199,7 @@ class GptOssToolParser(ToolParser):
 
     @rollout_trace_op
     async def extract_tool_calls(self, responses_ids: list[int]) -> tuple[str, list[FunctionCall]]:
-        loop = get_event_loop()
+        loop = asyncio.get_running_loop()
         # We need to keep special tokens for gpt-oss model for better tool call extraction.
         text = await loop.run_in_executor(None, lambda: self.tokenizer.decode(responses_ids, skip_special_tokens=False))
         # Need to remove padding tokens for better tool call extraction.

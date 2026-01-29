@@ -41,11 +41,21 @@ class MCPClientManager:
         exclude_sse_servers = {self.rootServerName: {}}
         for server_name in servers.keys():
             server = servers[server_name]
-            if "auth_token" in server:
-                transport = SSETransport(url=server["url"], headers={"Authorization": f"Bearer {server['auth_token']}"})
+            # Check if this is an SSE/HTTP transport
+            transport_type = server.get("transport", "").lower()
+            is_sse_transport = transport_type in ("sse", "http", "streamablehttp") or "url" in server
+
+            if is_sse_transport:
+                # Use SSETransport for SSE/HTTP based servers
+                if "auth_token" in server and server["auth_token"]:
+                    transport = SSETransport(url=server["url"], headers={"Authorization": f"Bearer {server['auth_token']}"})
+                else:
+                    # SSE without authentication
+                    transport = SSETransport(url=server["url"])
                 client = Client(transport)
                 self.clients.append(client)
             else:
+                # For stdio or other transports, use config-based initialization
                 exclude_sse_servers[self.rootServerName][server_name] = server
 
         if exclude_sse_servers[self.rootServerName]:
